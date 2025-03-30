@@ -107,6 +107,7 @@ class StateMessage extends SyncplayMessage {
 class SetMessage extends SyncplayMessage {
   final double? duration;
   final String? fileName;
+  final String? username;
   final int? size;
   final String? setBy;
   final String? room;
@@ -116,6 +117,7 @@ class SetMessage extends SyncplayMessage {
   SetMessage({
     this.duration,
     this.fileName,
+    this.username,
     this.size,
     this.setBy,
     this.room,
@@ -125,13 +127,13 @@ class SetMessage extends SyncplayMessage {
 
   @override
   Map<String, dynamic> toJson() {
-    if (setJoined != null && room != null) {
+    if (setJoined != null && room != null && username != null) {
       return {
         "Set": {
-          "32421321": {
-            room: {"name": room},
+          room: {
+            "room": {"name": room},
             "event": {"joined": true}
-          }
+          },
         }
       };
     }
@@ -161,9 +163,36 @@ class SetMessage extends SyncplayMessage {
   }
 }
 
+class ChatMessage extends SyncplayMessage {
+  final String message;
+
+  ChatMessage({
+    required this.message,
+  });
+
+  @override
+  Map<String, dynamic> toJson() => {'Chat': message};
+}
+
+class TLSMessage extends SyncplayMessage {
+  final String message;
+
+  TLSMessage({
+    required this.message,
+  });
+
+  @override
+  Map<String, dynamic> toJson() => {
+        'TLS': {
+          'startTLS': message,
+        },
+      };
+}
+
 class SyncplayClient {
   final String _host;
   final int _port;
+  bool _isTLS = false;
   Socket? _socket;
   String? _username;
   String? _currentRoom;
@@ -173,6 +202,8 @@ class SyncplayClient {
   StreamController<Map<String, dynamic>>? _generalMessageController =
       StreamController.broadcast();
   StreamController<Map<String, dynamic>>? _roomMessageController =
+      StreamController.broadcast();
+  StreamController<Map<String, dynamic>>? _chatMessageController =
       StreamController.broadcast();
   StreamController<Map<String, dynamic>>? _flieChangedMessageController =
       StreamController.broadcast();
@@ -191,6 +222,7 @@ class SyncplayClient {
   int _serverIgnoringOnTheFly = 0;
 
   bool get isConnected => _socket != null;
+  bool get isTLS => _isTLS;
   String? get username => _username;
   String? get currentRoom => _currentRoom;
   String? get currentFileName => _currentFileName;
@@ -209,6 +241,11 @@ class SyncplayClient {
     return _roomMessageController!.stream;
   }
 
+  Stream<Map<String, dynamic>> get onChatMessage {
+    _chatMessageController ??= StreamController.broadcast();
+    return _chatMessageController!.stream;
+  }
+
   Stream<Map<String, dynamic>> get onFileChangedMessage {
     _flieChangedMessageController ??= StreamController.broadcast();
     return _flieChangedMessageController!.stream;
@@ -223,7 +260,7 @@ class SyncplayClient {
       : _host = host,
         _port = port;
 
-  Future<void> connect() async {
+  Future<void> connect({bool enableTLS = true}) async {
     if (_generalMessageController?.isClosed ?? true) {
       _generalMessageController = StreamController.broadcast();
     }
@@ -240,12 +277,20 @@ class SyncplayClient {
       _socket = await Socket.connect(_host, _port);
       print('SyncPlay: connected to Syncplay server: $_host:$_port');
       _setupSocketHandlers();
+      if (enableTLS) {
+        requestTLS();
+      }
     } on SocketException catch (e) {
       _generalMessageController?.addError(
         SyncplayConnectionException(
             'SyncPlay: connection failed: ${e.message}'),
       );
     }
+  }
+
+  Future<void> requestTLS() async {
+    print('SyncPlay: requesting TLS connection upgrade');
+    await _sendMessage(TLSMessage(message: 'send'));
   }
 
   Future<void> joinRoom(String room, String username) async {
@@ -257,6 +302,19 @@ class SyncplayClient {
     ));
   }
 
+  Future<void> sendChatMessage(String message) async {
+    if (_currentRoom == null || _username == null) {
+      _generalMessageController?.addError(
+        SyncplayProtocolException(
+            'SyncPlay: send chat message failed, not in a room'),
+      );
+      return;
+    }
+    await _sendMessage(ChatMessage(
+      message: message,
+    ));
+  }
+
   Future<void> setSyncPlayPlaying(
       String bangumiName, double duration, int size) async {
     if (_currentRoom == null || _username == null) {
@@ -264,6 +322,7 @@ class SyncplayClient {
         SyncplayProtocolException(
             'SyncPlay: set playing bangumi failed, not in a room'),
       );
+      return;
     }
     await _sendMessage(SetMessage(
         duration: duration,
@@ -288,6 +347,8 @@ class SyncplayClient {
     _generalMessageController = null;
     await _roomMessageController?.close();
     _roomMessageController = null;
+    await _chatMessageController?.close();
+    _chatMessageController = null;
     await _flieChangedMessageController?.close();
     _flieChangedMessageController = null;
     await _positionChangedMessageController?.close();
@@ -301,6 +362,7 @@ class SyncplayClient {
     _currentFileName = null;
     _currentPositon = 0.0;
     _isPaused = true;
+    _isTLS = false;
     _lastLatencyCalculation = null;
     _clientIgnoringOnTheFly = 0;
     _serverIgnoringOnTheFly = 0;
@@ -369,8 +431,29 @@ class SyncplayClient {
     );
   }
 
-  void _handleMessage(dynamic data) {
+  void _handleMessage(dynamic data) async {
     final json = data as Map<String, dynamic>;
+    if (json.containsKey('TLS')) {
+      if (json['TLS'].containsKey('startTLS')) {
+        if (json['TLS']['startTLS'] == 'true') {
+          var plainSocket = _socket;
+          try {
+            _socket = await SecureSocket.secure(plainSocket!);
+            _setupSocketHandlers();
+            _isTLS = true;
+            print('SyncPlay: TLS connection established');
+            try {
+              plainSocket.close();
+            } catch (_) {}
+          } catch (e) {
+            print('SyncPlay: TLS connection upgrade failed: $e');
+            _socket = plainSocket;
+            _isTLS = false;
+          }
+        }
+      }
+      return;
+    }
     if (json.containsKey('Hello')) {
       if (json['Hello'].containsKey('room') &&
           json['Hello']['room'].containsKey('name')) {
@@ -385,7 +468,8 @@ class SyncplayClient {
         'room': json['Hello']['room']['name'],
       });
       return;
-    } else if (json.containsKey('State')) {
+    }
+    if (json.containsKey('State')) {
       if (json['State'].containsKey('ping')) {
         _lastLatencyCalculation =
             json['State']['ping']['latencyCalculation']?.toDouble();
@@ -432,7 +516,8 @@ class SyncplayClient {
         paused: _isPaused,
       );
       return;
-    } else if (json.containsKey('Set')) {
+    }
+    if (json.containsKey('Set')) {
       if (json['Set'].containsKey('playlistIndex')) {
         _roomMessageController?.add({
           'type': 'init',
@@ -465,11 +550,21 @@ class SyncplayClient {
           }
         }
       }
-    } else {
-      _generalMessageController?.addError(
-        SyncplayProtocolException('SyncPlay: unknown message type'),
-      );
+      return;
     }
+    if (json.containsKey('Chat')) {
+      if (json['Chat'].containsKey('message') &&
+          json['Chat'].containsKey('username')) {
+        _chatMessageController?.add({
+          'message': json['Chat']['message'],
+          'username': json['Chat']['username'],
+        });
+      }
+      return;
+    }
+    _generalMessageController?.addError(
+      SyncplayProtocolException('SyncPlay: unknown message type'),
+    );
   }
 
   Future<void> _setReady() async {
@@ -477,10 +572,12 @@ class SyncplayClient {
       _generalMessageController?.addError(
         SyncplayProtocolException('SyncPlay: set ready failed, not in a room'),
       );
+      return;
     }
     await _sendMessage(
       SetMessage(
         setJoined: true,
+        username: _username,
         room: _currentRoom,
       ),
     );
@@ -496,6 +593,7 @@ class SyncplayClient {
       _generalMessageController?.addError(
         SyncplayConnectionException('SyncPlay: not connected to server'),
       );
+      return;
     }
     final json = message.toJson();
     final jsonStr = jsonEncode(json);
