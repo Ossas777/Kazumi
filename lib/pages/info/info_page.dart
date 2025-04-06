@@ -27,13 +27,89 @@ class InfoPage extends StatefulWidget {
   State<InfoPage> createState() => _InfoPageState();
 }
 
-class _InfoPageState extends State<InfoPage>
-    with SingleTickerProviderStateMixin {
+class _InfoPageState extends State<InfoPage> with TickerProviderStateMixin {
   final InfoController infoController = Modular.get<InfoController>();
   final VideoPageController videoPageController =
       Modular.get<VideoPageController>();
   final PluginsController pluginsController = Modular.get<PluginsController>();
-  late TabController tabController;
+  late TabController sourceTabController;
+  late TabController infoTabController;
+
+  bool commentsIsLoading = false;
+  bool charactersIsLoading = false;
+  bool commentsQueryTimeout = false;
+  bool charactersQueryTimeout = false;
+  bool staffIsLoading = false;
+  bool staffQueryTimeout = false;
+
+  Future<void> loadCharacters() async {
+    if (charactersIsLoading) return;
+    setState(() {
+      charactersIsLoading = true;
+      charactersQueryTimeout = false;
+    });
+    infoController
+        .queryBangumiCharactersByID(infoController.bangumiItem.id)
+        .then((_) {
+      if (infoController.characterList.isEmpty && mounted) {
+        setState(() {
+          charactersIsLoading = false;
+          charactersQueryTimeout = true;
+        });
+      }
+      if (infoController.characterList.isNotEmpty && mounted) {
+        setState(() {
+          charactersIsLoading = false;
+        });
+      }
+    });
+  }
+
+  Future<void> loadStaff() async {
+    if (staffIsLoading) return;
+    setState(() {
+      staffIsLoading = true;
+      staffQueryTimeout = false;
+    });
+    infoController
+        .queryBangumiStaffsByID(infoController.bangumiItem.id)
+        .then((_) {
+      if (infoController.staffList.isEmpty && mounted) {
+        setState(() {
+          staffIsLoading = false;
+          staffQueryTimeout = true;
+        });
+      }
+      if (infoController.staffList.isNotEmpty && mounted) {
+        setState(() {
+          staffIsLoading = false;
+        });
+      }
+    });
+  }
+
+  Future<void> loadMoreComments({int offset = 0}) async {
+    if (commentsIsLoading) return;
+    setState(() {
+      commentsIsLoading = true;
+      commentsQueryTimeout = false;
+    });
+    infoController
+        .queryBangumiCommentsByID(infoController.bangumiItem.id, offset: offset)
+        .then((_) {
+      if (infoController.commentsList.isEmpty && mounted) {
+        setState(() {
+          commentsIsLoading = false;
+          commentsQueryTimeout = true;
+        });
+      }
+      if (infoController.commentsList.isNotEmpty && mounted) {
+        setState(() {
+          commentsIsLoading = false;
+        });
+      }
+    });
+  }
 
   @override
   void initState() {
@@ -45,17 +121,36 @@ class _InfoPageState extends State<InfoPage>
         infoController.bangumiItem.votesCount.isEmpty) {
       queryBangumiInfoByID(infoController.bangumiItem.id, type: 'attach');
     }
-    tabController =
+    sourceTabController =
         TabController(length: pluginsController.pluginList.length, vsync: this);
+    infoTabController = TabController(length: 5, vsync: this);
+    infoTabController.addListener(() {
+      int index = infoTabController.index;
+      if (index == 1 &&
+          infoController.commentsList.isEmpty &&
+          !commentsIsLoading) {
+        loadMoreComments();
+      }
+      if (index == 2 &&
+          infoController.characterList.isEmpty &&
+          !charactersIsLoading) {
+        loadCharacters();
+      }
+      if (index == 4 && infoController.staffList.isEmpty && !staffIsLoading) {
+        loadStaff();
+      }
+    });
   }
 
   @override
   void dispose() {
     infoController.characterList.clear();
     infoController.commentsList.clear();
+    infoController.staffList.clear();
     infoController.pluginSearchResponseList.clear();
     videoPageController.currentEpisode = 1;
-    tabController.dispose();
+    sourceTabController.dispose();
+    infoTabController.dispose();
     super.dispose();
   }
 
@@ -213,6 +308,7 @@ class _InfoPageState extends State<InfoPage>
                     ),
                     forceElevated: innerBoxIsScrolled,
                     bottom: TabBar(
+                      controller: infoTabController,
                       isScrollable: true,
                       tabAlignment: TabAlignment.center,
                       dividerHeight: 0,
@@ -222,7 +318,22 @@ class _InfoPageState extends State<InfoPage>
                 ),
               ];
             },
-            body: InfoTabView(),
+            body: Observer(builder: (context) {
+              return InfoTabView(
+                tabController: infoTabController,
+                bangumiItem: infoController.bangumiItem,
+                commentsQueryTimeout: commentsQueryTimeout,
+                charactersQueryTimeout: charactersQueryTimeout,
+                staffQueryTimeout: staffQueryTimeout,
+                loadMoreComments: loadMoreComments,
+                loadCharacters: loadCharacters,
+                loadStaff: loadStaff,
+                commentsList: infoController.commentsList,
+                characterList: infoController.characterList,
+                staffList: infoController.staffList,
+                isLoading: infoController.isLoading,
+              );
+            }),
           ),
           floatingActionButton: FloatingActionButton.extended(
             icon: const Icon(Icons.play_arrow_rounded),
@@ -245,7 +356,7 @@ class _InfoPageState extends State<InfoPage>
                 showDragHandle: true,
                 context: context,
                 builder: (context) {
-                  return SourceSheet(tabController: tabController);
+                  return SourceSheet(tabController: sourceTabController);
                 },
               );
             },
