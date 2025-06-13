@@ -49,6 +49,13 @@ class Utils {
     return randomElement;
   }
 
+  static String getRandomAcceptedLanguage() {
+    final random = Random();
+    String randomElement =
+        acceptLanguageList[random.nextInt(acceptLanguageList.length)];
+    return randomElement;
+  }
+
   static Future<Map<String, double>?> getScreenInfo() async {
     final screenPixelPlugin = ScreenPixel();
     Map<String, double>? screenResolution;
@@ -465,11 +472,6 @@ class Utils {
     await SystemChrome.setPreferredOrientations([]);
   }
 
-  // 获取当前解复用器
-  static Future<String> getCurrentDemux() async {
-    return 'MPV';
-  }
-
   static String getSeasonStringByMonth(int month) {
     if (month <= 3) return '冬';
     if (month <= 6) return '春';
@@ -487,7 +489,8 @@ class Utils {
   static Future<void> exitDesktopPIPWindow() async {
     bool isLowResolution = await Utils.isLowResolution();
     await windowManager.setAlwaysOnTop(false);
-    await windowManager.setSize(isLowResolution ? const Size(800, 600) : const Size(1280, 860));
+    await windowManager.setSize(
+        isLowResolution ? const Size(800, 600) : const Size(1280, 860));
     await windowManager.center();
   }
 
